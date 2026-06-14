@@ -8,6 +8,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { PrivacyPanel } from "../components/PrivacyPanel";
+import { UrlDocumentLoader } from "../components/UrlDocumentLoader";
 import { ViewerHost } from "../components/ViewerHost";
 import { ViewerToolbar } from "../components/ViewerToolbar";
 import { validateFileSize } from "../documents/limits";
@@ -19,10 +20,60 @@ import type { OpenedDocument, ReadProgress } from "../documents/types";
 type AppState =
   | { status: "idle" }
   | { status: "confirm-large"; file: File; title: string; message: string }
+  | { status: "fetching-url"; url: string }
   | { status: "reading"; fileName: string; progress?: ReadProgress }
   | { status: "parsing"; fileName: string }
   | { status: "ready"; document: OpenedDocument }
   | { status: "error"; error: unknown };
+
+function normalizeInternalDocumentUrl(value: string) {
+  const source = value.trim();
+  let url: URL;
+
+  try {
+    url = new URL(source, window.location.origin);
+  } catch {
+    throw new DocumentError({
+      code: "read-failed",
+      title: "Invalid document URL",
+      message: "Use an internal /url/... document path or paste a full HTTP(S) document URL.",
+    });
+  }
+
+  if (url.origin === window.location.origin && url.pathname.startsWith("/url/")) {
+    return `${url.pathname}${url.search}`;
+  }
+
+  if (/^https?:\/\//i.test(source) && (url.protocol === "https:" || url.protocol === "http:")) {
+    return `/url/${url.href}`;
+  }
+
+  throw new DocumentError({
+    code: "read-failed",
+    title: "Invalid document URL",
+    message: "Only /url/... paths or HTTP(S) document URLs can be opened.",
+  });
+}
+
+function getFileNameFromContentDisposition(header: string | null) {
+  const filename = /filename="([^"]+)"/i.exec(header ?? "")?.[1] ?? /filename=([^;]+)/i.exec(header ?? "")?.[1];
+  return filename?.trim();
+}
+
+function getFileNameFromUrl(internalUrl: string) {
+  const pathname = new URL(internalUrl, window.location.origin).pathname;
+  const lastSegment = pathname.split("/").filter(Boolean).at(-1);
+
+  if (!lastSegment) {
+    return "document.bin";
+  }
+
+  try {
+    return decodeURIComponent(lastSegment);
+  } catch {
+    return lastSegment;
+  }
+}
 
 export function App() {
   const [state, setState] = useState<AppState>({ status: "idle" });
@@ -115,6 +166,72 @@ export function App() {
     }
   };
 
+  const openUrlDocument = async (value: string) => {
+    let internalUrl: string;
+
+    try {
+      internalUrl = normalizeInternalDocumentUrl(value);
+    } catch (error) {
+      setState({ status: "error", error });
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    session.clear();
+    setState({ status: "fetching-url", url: internalUrl });
+
+    try {
+      const response = await fetch(internalUrl, {
+        credentials: "same-origin",
+        signal: abortController.signal,
+      });
+
+      if (!response.ok) {
+        throw new DocumentError({
+          code: "read-failed",
+          title: "URL document could not be loaded",
+          message: response.status === 404
+            ? "The internal document URL was not found or uses an unknown alias."
+            : "The document proxy could not fetch that file. Check the path and try again.",
+        });
+      }
+
+      const blob = await response.blob();
+
+      if (abortController.signal.aborted) {
+        return;
+      }
+
+      if (blob.size === 0) {
+        throw new DocumentError({
+          code: "read-failed",
+          title: "URL response was empty",
+          message: "The internal URL responded successfully, but it did not contain a document file.",
+        });
+      }
+
+      const fileName = getFileNameFromContentDisposition(response.headers.get("Content-Disposition")) ?? getFileNameFromUrl(internalUrl);
+      const file = new File([blob], fileName, {
+        type: response.headers.get("Content-Type") ?? blob.type,
+        lastModified: Date.now(),
+      });
+
+      await openFile(file);
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+
+      if (import.meta.env.DEV) {
+        console.error("URL document open failed", error);
+      }
+
+      setState({ status: "error", error });
+    }
+  };
+
   return (
     <div className="app-shell">
       <input
@@ -131,6 +248,7 @@ export function App() {
         {state.status === "idle" && (
           <>
             <DropZone onFileSelected={(file) => void openFile(file)} />
+            <UrlDocumentLoader onOpenUrl={(url) => void openUrlDocument(url)} />
             <div className="landing-support">
               <div>
                 <ShieldCheck aria-hidden="true" size={20} />
@@ -168,6 +286,10 @@ export function App() {
             message={`Preparing ${state.fileName} without uploading it.`}
             progress={state.progress}
           />
+        )}
+
+        {state.status === "fetching-url" && (
+          <LoadingState title="Loading URL document" message={`Fetching ${state.url} through the document proxy.`} />
         )}
 
         {state.status === "parsing" && (

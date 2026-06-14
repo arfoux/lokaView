@@ -15,6 +15,10 @@ export function PrivacyPanel() {
           adapters. There is no login, database, document upload endpoint, or remote conversion
           service in the core viewer.
         </p>
+        <p>
+          Internal /url/... links are optional and are fetched through the app proxy before being
+          rendered locally in this browser.
+        </p>
       </div>
     </details>
   );

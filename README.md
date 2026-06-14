@@ -22,9 +22,13 @@ Intentionally unsupported:
 
 ## Privacy Model
 
-The core app has no login, database, analytics, document upload route, remote conversion service, or Worker-side document processing.
+The core app has no login, database, analytics, remote conversion service, or Worker-side document parsing.
 
 Selected files are read through browser File APIs and passed to local adapters inside the same browser session. The frontend may fetch its own static JavaScript, CSS, and worker assets from the app origin, but selected document bytes, text, names, thumbnails, and metadata are not sent to a remote endpoint.
+
+The optional `/url/...` mode is different from local upload: it fetches a document through the Cloudflare Worker proxy, then renders the returned bytes client-side with the same viewer pipeline as a local file. This exists for internal alias URLs such as `/url/fileku/datamahasiswa.docx` and full HTTP(S) document URLs such as `/url/https://calibre-ebook.com/downloads/demos/demo.docx`; it is a proxy response, not a redirect.
+
+GitHub-backed allowlisted URL sources are fetched by the Worker with a `GITHUB_TOKEN` Cloudflare secret. The token is never placed in frontend code, local storage, query strings, or responses, and it is not used for arbitrary GitHub owner/repo input.
 
 Additional safeguards:
 
@@ -62,6 +66,12 @@ npm run deploy
 
 `wrangler.toml` points `assets.directory` at `./dist` and enables `single-page-application` fallback routing.
 
+The Worker also handles `/url/*` before falling back to static assets. Configure the GitHub token as a Worker secret before using GitHub-backed URL aliases:
+
+```bash
+npx wrangler secret put GITHUB_TOKEN
+```
+
 Note: the current Cloudflare Vite plugin line requires Wrangler 4. The Wrangler-3-compatible plugin line has dev-server audit advisories, so this repo intentionally uses direct Wrangler Static Assets config instead. The config uses features available in Wrangler 3.114.x; the repo pins a patched Wrangler 3.114 release.
 
 ## Project Structure
@@ -74,6 +84,7 @@ Note: the current Cloudflare Vite plugin line requires Wrangler 4. The Wrangler-
 - `src/documents/xlsx`: XLSX adapter and shared spreadsheet grid.
 - `src/documents/pptx`: PPTX adapter and renderer integration.
 - `src/documents/csv`: CSV parser, adapter, and grid viewer.
+- `src/worker`: Cloudflare Worker entry and `/url/*` proxy helpers.
 - `src/tests`: detection, limits, adapter smoke, cleanup, malformed/unsupported tests.
 - `public/_headers`: deployment security headers.
 
