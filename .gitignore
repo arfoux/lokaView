@@ -1,0 +1,39 @@
+node_modules/
+dist/
+.wrangler/
+.env
+.env.*
+*.log
+*.local
+coverage/
+
+# private/local prompt history
+prompt.md
+
+# environment / secrets
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+.next/
+out/
+
+# cache
+.cache/
+.wrangler/
+coverage/
+
+# logs
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
