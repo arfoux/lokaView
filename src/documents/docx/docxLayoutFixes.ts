@@ -5,8 +5,33 @@ export interface DocxSectionLayoutHints {
   suppressFirstPageFooter: boolean;
 }
 
+export interface DocxLetterheadRun {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  color?: string;
+}
+
+export interface DocxLetterheadParagraph {
+  runs: DocxLetterheadRun[];
+}
+
+export interface DocxLetterheadImage {
+  src: string;
+  x: number;
+}
+
+export interface DocxLetterheadHint {
+  sourcePart: string;
+  repeatOnPages: boolean;
+  paragraphs: DocxLetterheadParagraph[];
+  images: DocxLetterheadImage[];
+}
+
 export interface DocxLayoutHints {
   sections: DocxSectionLayoutHints[];
+  letterhead?: DocxLetterheadHint;
 }
 
 interface DocxPageMetrics {
@@ -29,6 +54,7 @@ const PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relations
 const HEADER_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
 const HEADER_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml";
 const EMU_PER_DXA = 635;
+const IMAGE_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 
 function isElement(node: Node): node is Element {
   return node.nodeType === 1;
@@ -96,6 +122,313 @@ function getNumericAttribute(element: Element | undefined, name: string): number
   const parsedValue = value ? Number(value) : Number.NaN;
 
   return Number.isFinite(parsedValue) ? parsedValue : undefined;
+}
+
+function getPartRelationshipsPath(partPath: string): string {
+  const segments = partPath.split("/");
+  const fileName = segments.pop() ?? "";
+  return [...segments, "_rels", `${fileName}.rels`].join("/");
+}
+
+function normalizeZipPath(path: string): string {
+  const segments: string[] = [];
+
+  path.split("/").forEach((segment) => {
+    if (!segment || segment === ".") {
+      return;
+    }
+
+    if (segment === "..") {
+      segments.pop();
+      return;
+    }
+
+    segments.push(segment);
+  });
+
+  return segments.join("/");
+}
+
+function resolveRelationshipTarget(partPath: string, target: string): string {
+  if (target.startsWith("/")) {
+    return normalizeZipPath(target.slice(1));
+  }
+
+  const basePath = partPath.split("/").slice(0, -1).join("/");
+  return normalizeZipPath(`${basePath}/${target}`);
+}
+
+function getRelationshipTargets(files: ZipEntries, partPath: string): Map<string, string> {
+  const relationshipsPath = getPartRelationshipsPath(partPath);
+  const relationshipsBytes = files[relationshipsPath];
+  const targets = new Map<string, string>();
+
+  if (!relationshipsBytes) {
+    return targets;
+  }
+
+  const relationships = parseXml(relationshipsBytes);
+
+  getElementsByLocalName(relationships, "Relationship").forEach((relationship) => {
+    const id = getAttributeByLocalName(relationship, "Id");
+    const type = getAttributeByLocalName(relationship, "Type");
+    const target = getAttributeByLocalName(relationship, "Target");
+
+    if (id && target && type === IMAGE_REL_TYPE) {
+      targets.set(id, resolveRelationshipTarget(partPath, target));
+    }
+  });
+
+  return targets;
+}
+
+function getImageMimeType(path: string): string {
+  const lowerPath = path.toLowerCase();
+
+  if (lowerPath.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+
+  if (lowerPath.endsWith(".gif")) {
+    return "image/gif";
+  }
+
+  if (lowerPath.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  return "application/octet-stream";
+}
+
+function bytesToBase64(bytes: ZipEntryBytes): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+}
+
+function bytesToDataUrl(bytes: ZipEntryBytes, path: string): string {
+  return `data:${getImageMimeType(path)};base64,${bytesToBase64(bytes)}`;
+}
+
+function getTogglePropertyValue(runProperties: Element | undefined, propertyName: string): boolean | undefined {
+  if (!runProperties) {
+    return undefined;
+  }
+
+  const property = getChildElementsByLocalName(runProperties, propertyName)[0];
+
+  if (!property) {
+    return undefined;
+  }
+
+  const value = getAttributeByLocalName(property, "val");
+
+  return value !== "0" && value !== "false" && value !== "none";
+}
+
+function getRunProperties(element: Element): Element | undefined {
+  return getChildElementsByLocalName(element, "rPr")[0];
+}
+
+function getParagraphRunProperties(paragraph: Element): Element | undefined {
+  const paragraphProperties = getChildElementsByLocalName(paragraph, "pPr")[0];
+  return paragraphProperties ? getChildElementsByLocalName(paragraphProperties, "rPr")[0] : undefined;
+}
+
+function getRunText(run: Element): string {
+  return getElementsByLocalName(run, "t").map((text) => text.textContent ?? "").join("");
+}
+
+function getTextBoxText(textBox: Element): string {
+  return getElementsByLocalName(textBox, "t").map((text) => text.textContent ?? "").join("");
+}
+
+function getRunColor(runProperties: Element | undefined): string | undefined {
+  const color = runProperties ? getChildElementsByLocalName(runProperties, "color")[0] : undefined;
+  const value = color ? getAttributeByLocalName(color, "val") : undefined;
+
+  if (!value || value.toLowerCase() === "auto") {
+    return undefined;
+  }
+
+  return `#${value}`;
+}
+
+function extractLetterheadParagraph(paragraph: Element): DocxLetterheadParagraph | undefined {
+  const paragraphRunProperties = getParagraphRunProperties(paragraph);
+  const paragraphBold = getTogglePropertyValue(paragraphRunProperties, "b") ?? false;
+  const paragraphItalic = getTogglePropertyValue(paragraphRunProperties, "i") ?? false;
+  const paragraphUnderline = getTogglePropertyValue(paragraphRunProperties, "u") ?? false;
+  const runs: DocxLetterheadRun[] = [];
+
+  const appendRun = (run: Element) => {
+    const text = getRunText(run);
+
+    if (!text) {
+      return;
+    }
+
+    const runProperties = getRunProperties(run);
+    runs.push({
+      text,
+      bold: getTogglePropertyValue(runProperties, "b") ?? paragraphBold,
+      italic: getTogglePropertyValue(runProperties, "i") ?? paragraphItalic,
+      underline: getTogglePropertyValue(runProperties, "u") ?? paragraphUnderline,
+      color: getRunColor(runProperties),
+    });
+  };
+
+  Array.from(paragraph.childNodes).filter(isElement).forEach((child) => {
+    if (getLocalName(child) === "r") {
+      appendRun(child);
+      return;
+    }
+
+    if (getLocalName(child) === "hyperlink") {
+      getChildElementsByLocalName(child, "r").forEach(appendRun);
+    }
+  });
+
+  return runs.some((run) => run.text.trim()) ? { runs } : undefined;
+}
+
+function extractLetterheadParagraphs(textBox: Element): DocxLetterheadParagraph[] {
+  return getChildElementsByLocalName(textBox, "p")
+    .map(extractLetterheadParagraph)
+    .filter((paragraph): paragraph is DocxLetterheadParagraph => Boolean(paragraph));
+}
+
+function getClosestDrawingContainer(element: Element): Element | undefined {
+  let current = element.parentElement;
+
+  while (current) {
+    const name = getLocalName(current);
+
+    if (name === "anchor" || name === "inline") {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return undefined;
+}
+
+function getDrawingAnchorXPosition(picture: Element): number | undefined {
+  const container = getClosestDrawingContainer(picture);
+
+  if (!container) {
+    return undefined;
+  }
+
+  const positionH = getChildElementsByLocalName(container, "positionH")[0];
+  const posOffset = positionH ? getChildElementsByLocalName(positionH, "posOffset")[0] : undefined;
+  const offset = Number.parseInt(posOffset?.textContent ?? "", 10);
+
+  if (Number.isFinite(offset)) {
+    return offset;
+  }
+
+  const simplePosition = getChildElementsByLocalName(container, "simplePos")[0];
+  const x = Number.parseInt(simplePosition ? getAttributeByLocalName(simplePosition, "x") ?? "" : "", 10);
+
+  return Number.isFinite(x) ? x : undefined;
+}
+
+function getPictureXPosition(picture: Element): number {
+  const anchorX = getDrawingAnchorXPosition(picture);
+
+  if (anchorX !== undefined) {
+    return anchorX;
+  }
+
+  const transform = getElementsByLocalName(picture, "xfrm")[0];
+  const offset = transform ? getChildElementsByLocalName(transform, "off")[0] : undefined;
+  return getNumericAttribute(offset, "x") ?? 0;
+}
+
+function extractLetterheadImages(files: ZipEntries, xml: Document, partPath: string): DocxLetterheadImage[] {
+  const targets = getRelationshipTargets(files, partPath);
+  const images: DocxLetterheadImage[] = [];
+  const usedIds = new Set<string>();
+
+  getElementsByLocalName(xml, "pic").forEach((picture) => {
+    const blip = getElementsByLocalName(picture, "blip")[0];
+    const embedId = blip ? getAttributeByLocalName(blip, "embed") : undefined;
+    const target = embedId ? targets.get(embedId) : undefined;
+    const bytes = target ? files[target] : undefined;
+
+    if (!embedId || !target || !bytes || usedIds.has(embedId)) {
+      return;
+    }
+
+    usedIds.add(embedId);
+    images.push({
+      src: bytesToDataUrl(bytes, target),
+      x: getPictureXPosition(picture),
+    });
+  });
+
+  return images.sort((left, right) => left.x - right.x).slice(0, 2);
+}
+
+function extractLetterheadFromPart(files: ZipEntries, partPath: string): DocxLetterheadHint | undefined {
+  const bytes = files[partPath];
+
+  if (!bytes) {
+    return undefined;
+  }
+
+  const xml = parseXml(bytes);
+  const textBoxes = getElementsByLocalName(xml, "txbxContent");
+  const textBox = textBoxes.find((candidate) => {
+    const text = getTextBoxText(candidate).toUpperCase();
+    return text.includes("HIMPUNAN") && text.includes("SEKRETARIAT");
+  });
+
+  if (!textBox) {
+    return undefined;
+  }
+
+  const paragraphs = extractLetterheadParagraphs(textBox);
+
+  if (paragraphs.length === 0) {
+    return undefined;
+  }
+
+  return {
+    sourcePart: partPath,
+    repeatOnPages: /^word\/header\d+\.xml$/i.test(partPath),
+    paragraphs,
+    images: extractLetterheadImages(files, xml, partPath),
+  };
+}
+
+function extractLetterheadHint(files: ZipEntries): DocxLetterheadHint | undefined {
+  const candidateParts = [
+    ...Object.keys(files).filter((path) => /^word\/header\d+\.xml$/i.test(path)).sort(),
+    "word/document.xml",
+  ];
+
+  for (const partPath of candidateParts) {
+    const hint = extractLetterheadFromPart(files, partPath);
+
+    if (hint) {
+      return hint;
+    }
+  }
+
+  return undefined;
 }
 
 function getFirstSectionPageMetrics(sectionProperties: Element | undefined): DocxPageMetrics | undefined {
@@ -364,6 +697,273 @@ function keepHeaderFloatingElementsInsidePages(root: HTMLElement): void {
   });
 }
 
+function renderLetterheadRun(run: DocxLetterheadRun): HTMLSpanElement {
+  const span = window.document.createElement("span");
+  span.textContent = run.text;
+  span.style.fontFamily = '"Times New Roman", Times, serif';
+  span.style.fontWeight = run.bold ? "700" : "400";
+  span.style.fontStyle = run.italic ? "italic" : "normal";
+
+  if (run.underline) {
+    span.style.textDecorationLine = "underline";
+  }
+
+  if (run.color) {
+    span.style.color = run.color;
+  }
+
+  return span;
+}
+
+function renderLetterheadParagraph(paragraph: DocxLetterheadParagraph, index: number): HTMLParagraphElement {
+  const element = window.document.createElement("p");
+  element.className = index === 0 ? "docx-letterhead-title" : "docx-letterhead-meta";
+  paragraph.runs.forEach((run) => element.appendChild(renderLetterheadRun(run)));
+  return element;
+}
+
+function createLetterheadFallback(letterhead: DocxLetterheadHint): HTMLElement {
+  const container = window.document.createElement("div");
+  container.className = "docx-letterhead-fallback";
+  container.setAttribute("contenteditable", "false");
+
+  const leftImage = letterhead.images[0];
+  const rightImage = letterhead.images.at(-1);
+
+  if (leftImage) {
+    const image = window.document.createElement("img");
+    image.className = "docx-letterhead-logo docx-letterhead-logo-left";
+    image.src = leftImage.src;
+    image.alt = "";
+    container.appendChild(image);
+  }
+
+  const text = window.document.createElement("div");
+  text.className = "docx-letterhead-text";
+  letterhead.paragraphs.forEach((paragraph, index) => text.appendChild(renderLetterheadParagraph(paragraph, index)));
+  container.appendChild(text);
+
+  if (rightImage && rightImage !== leftImage) {
+    const image = window.document.createElement("img");
+    image.className = "docx-letterhead-logo docx-letterhead-logo-right";
+    image.src = rightImage.src;
+    image.alt = "";
+    container.appendChild(image);
+  }
+
+  const rule = window.document.createElement("div");
+  rule.className = "docx-letterhead-rule";
+  container.appendChild(rule);
+
+  return container;
+}
+
+function isElementVisiblyRendered(element: Element): boolean {
+  const style = window.getComputedStyle(element);
+
+  return style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.opacity || "1") > 0;
+}
+
+function isRectInsidePageHeader(rect: DOMRect, pageRect: DOMRect): boolean {
+  const headerBottom = pageRect.top + Math.max(170, pageRect.height * 0.16);
+
+  return (
+    rect.width > 2 &&
+    rect.height > 2 &&
+    rect.bottom >= pageRect.top &&
+    rect.top <= headerBottom &&
+    rect.right >= pageRect.left &&
+    rect.left <= pageRect.right
+  );
+}
+
+function isElementTopmostAtRect(element: Element, rect: DOMRect): boolean {
+  const x = rect.left + (rect.width / 2);
+  const y = rect.top + (rect.height / 2);
+  const topElement = window.document.elementFromPoint(x, y);
+
+  return Boolean(topElement && (topElement === element || element.contains(topElement)));
+}
+
+function pageHasVisibleLetterheadText(page: HTMLElement): boolean {
+  const pageRect = page.getBoundingClientRect();
+  const walker = window.document.createTreeWalker(page, window.NodeFilter.SHOW_TEXT);
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const text = node.textContent?.toUpperCase() ?? "";
+
+    if (!text.includes("HIMPUNAN") && !text.includes("SEKRETARIAT")) {
+      continue;
+    }
+
+    const parent = node.parentElement;
+
+    if (!parent || parent.closest(".docx-letterhead-fallback") || !isElementVisiblyRendered(parent)) {
+      continue;
+    }
+
+    const range = window.document.createRange();
+    range.selectNodeContents(node);
+    const isVisible = Array.from(range.getClientRects()).some((rect) => (
+      isRectInsidePageHeader(rect, pageRect) && isElementTopmostAtRect(parent, rect)
+    ));
+    range.detach();
+
+    if (isVisible) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function pageHasVisibleLetterheadImage(page: HTMLElement): boolean {
+  const pageRect = page.getBoundingClientRect();
+
+  return Array.from(page.querySelectorAll<HTMLElement>("header img, header svg, img, svg")).some((element) => {
+    if (element.closest(".docx-letterhead-fallback") || !isElementVisiblyRendered(element)) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    return rect.width > 20 && rect.height > 20 && isRectInsidePageHeader(rect, pageRect);
+  });
+}
+
+function pageHasUsableNativeLetterhead(page: HTMLElement): boolean {
+  return pageHasVisibleLetterheadText(page) && pageHasVisibleLetterheadImage(page);
+}
+
+function getFirstVisibleArticleTextTop(article: HTMLElement): number | undefined {
+  const walker = window.document.createTreeWalker(article, window.NodeFilter.SHOW_TEXT);
+  let firstTop: number | undefined;
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+
+    if (!node.textContent?.trim()) {
+      continue;
+    }
+
+    const parent = node.parentElement;
+
+    if (!parent || !isElementVisiblyRendered(parent)) {
+      continue;
+    }
+
+    const range = window.document.createRange();
+    range.selectNodeContents(node);
+    const top = Array.from(range.getClientRects())
+      .filter((rect) => rect.width > 1 && rect.height > 1)
+      .reduce<number | undefined>((lowestTop, rect) => (
+        lowestTop === undefined ? rect.top : Math.min(lowestTop, rect.top)
+      ), undefined);
+    range.detach();
+
+    if (top === undefined) {
+      continue;
+    }
+
+    firstTop = firstTop === undefined ? top : Math.min(firstTop, top);
+  }
+
+  return firstTop;
+}
+
+function reserveLetterheadFallbackSpace(page: HTMLElement, fallback: HTMLElement): void {
+  const article = getDirectChild(page, "article") ?? page.querySelector<HTMLElement>("article");
+  const firstTextTop = article ? getFirstVisibleArticleTextTop(article) : undefined;
+
+  if (!article || firstTextTop === undefined) {
+    return;
+  }
+
+  const fallbackBottom = fallback.getBoundingClientRect().bottom;
+  const overlap = fallbackBottom + 14 - firstTextTop;
+
+  if (overlap <= 1) {
+    return;
+  }
+
+  const currentPaddingTop = Number.parseFloat(window.getComputedStyle(article).paddingTop);
+  article.style.boxSizing = "border-box";
+  article.style.paddingTop = `${Math.ceil((Number.isFinite(currentPaddingTop) ? currentPaddingTop : 0) + overlap)}px`;
+}
+
+function hideNativeLetterhead(page: HTMLElement, letterhead: DocxLetterheadHint): void {
+  if (!letterhead.repeatOnPages) {
+    return;
+  }
+
+  const header = getDirectChild(page, "header");
+
+  if (!header) {
+    return;
+  }
+
+  header.setAttribute("aria-hidden", "true");
+  header.style.visibility = "hidden";
+  header.style.pointerEvents = "none";
+}
+
+function injectLetterheadFallback(root: HTMLElement, letterhead: DocxLetterheadHint | undefined): void {
+  if (!letterhead) {
+    return;
+  }
+
+  const pages = Array.from(root.querySelectorAll<HTMLElement>(DOCX_PAGE_SELECTOR));
+  const targetPages = letterhead.repeatOnPages ? pages : pages.slice(0, 1);
+
+  targetPages.forEach((page) => {
+    if (page.querySelector(".docx-letterhead-fallback") || pageHasUsableNativeLetterhead(page)) {
+      return;
+    }
+
+    page.style.position = "relative";
+    page.classList.add("docx-has-letterhead-fallback");
+
+    const fallback = createLetterheadFallback(letterhead);
+    page.insertBefore(fallback, page.firstChild);
+    hideNativeLetterhead(page, letterhead);
+    reserveLetterheadFallbackSpace(page, fallback);
+  });
+}
+
+function normalizeInlineFontInheritance(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>("span").forEach((span) => {
+    if (span.style.fontFamily) {
+      return;
+    }
+
+    const paragraph = span.closest<HTMLElement>("p");
+
+    if (!paragraph) {
+      return;
+    }
+
+    const spanStyle = window.getComputedStyle(span);
+    const paragraphStyle = window.getComputedStyle(paragraph);
+
+    if (spanStyle.fontFamily === paragraphStyle.fontFamily || !paragraphStyle.fontFamily) {
+      return;
+    }
+
+    const hasInlineFormatting = Boolean(
+      span.style.fontWeight ||
+      span.style.fontStyle ||
+      span.style.textDecoration ||
+      span.style.textDecorationLine ||
+      span.style.fontSize ||
+      span.style.minHeight,
+    );
+
+    if (hasInlineFormatting && spanStyle.fontFamily.toLowerCase().includes("calibri")) {
+      span.style.fontFamily = paragraphStyle.fontFamily;
+    }
+  });
+}
+
 export function prepareDocxForPreview(arrayBuffer: ArrayBuffer): ArrayBuffer {
   if (typeof DOMParser === "undefined" || typeof XMLSerializer === "undefined") {
     return arrayBuffer;
@@ -435,6 +1035,7 @@ export function getDocxLayoutHints(arrayBuffer: ArrayBuffer): DocxLayoutHints {
 
     return {
       sections: sectionProperties.map(parseSectionLayoutHints),
+      letterhead: extractLetterheadHint(files),
     };
   } catch {
     return EMPTY_HINTS;
@@ -457,6 +1058,7 @@ export function applyDocxPostRenderFixes(root: HTMLElement, hints: DocxLayoutHin
     cell.style.textAlign = "left";
   });
 
+  normalizeInlineFontInheritance(root);
   keepWideTablesInsidePages(root);
 
   root.querySelectorAll<HTMLElement>("header").forEach((header) => {
@@ -485,4 +1087,5 @@ export function applyDocxPostRenderFixes(root: HTMLElement, hints: DocxLayoutHin
   });
 
   keepHeaderFloatingElementsInsidePages(root);
+  injectLetterheadFallback(root, hints.letterhead);
 }

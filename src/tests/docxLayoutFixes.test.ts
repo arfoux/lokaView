@@ -74,6 +74,79 @@ function makePreviewDocxBufferWithBody(body: string): ArrayBuffer {
   return toArrayBuffer(zipSync(files));
 }
 
+function makeLetterheadDocxBuffer(part: "header" | "document"): ArrayBuffer {
+  const textBox = `
+    <w:txbxContent>
+      <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>HIMPUNAN MAHASISWA TEKNOLOGI INFORMASI</w:t></w:r></w:p>
+      <w:p><w:r><w:rPr><w:i/></w:rPr><w:t>Sekretariat: Example Street</w:t></w:r></w:p>
+    </w:txbxContent>`;
+  const pictureDrawing = (id: string, posOffset: number) => `
+    <w:drawing>
+      <wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+        <wp:positionH relativeFrom="page"><wp:posOffset>${posOffset}</wp:posOffset></wp:positionH>
+        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <a:graphicData>
+            <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+              <pic:blipFill><a:blip r:embed="${id}"/></pic:blipFill>
+              <pic:spPr><a:xfrm><a:off x="0" y="0"/></a:xfrm></pic:spPr>
+            </pic:pic>
+          </a:graphicData>
+        </a:graphic>
+      </wp:anchor>
+    </w:drawing>`;
+  const textBoxDrawing = `
+    <w:drawing>
+      <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <a:graphicData>
+            <wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">${textBox}</wps:wsp>
+          </a:graphicData>
+        </a:graphic>
+      </wp:inline>
+    </w:drawing>`;
+  const drawing = `${pictureDrawing("rIdRight", 6000)}${pictureDrawing("rIdLeft", 0)}${textBoxDrawing}`;
+  const headerReference = part === "header" ? `<w:headerReference w:type="default" r:id="rIdHeader"/>` : "";
+  const headerPart: Record<string, Uint8Array> = part === "header"
+    ? {
+        "word/header1.xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${drawing}</w:hdr>`),
+        "word/_rels/header1.xml.rels": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdLeft" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/left.png"/>
+  <Relationship Id="rIdRight" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/right.png"/>
+</Relationships>`),
+      }
+    : {};
+  const documentDrawing = part === "document" ? drawing : "";
+
+  return toArrayBuffer(zipSync({
+    "[Content_Types].xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+</Types>`),
+    "word/_rels/document.xml.rels": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+  <Relationship Id="rIdLeft" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/left.png"/>
+  <Relationship Id="rIdRight" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/right.png"/>
+</Relationships>`),
+    "word/document.xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p><w:r>${documentDrawing}<w:t>Body</w:t></w:r></w:p>
+    <w:sectPr>${headerReference}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:left="1440" w:right="1440" w:top="1440" w:bottom="1440"/></w:sectPr>
+  </w:body>
+</w:document>`),
+    "word/media/left.png": strToU8("left"),
+    "word/media/right.png": strToU8("right"),
+    ...headerPart,
+  }));
+}
+
 describe("docxLayoutFixes", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -179,5 +252,28 @@ describe("docxLayoutFixes", () => {
 
     expect(documentXml).not.toContain("<w:lastRenderedPageBreak/><w:t>After</w:t>");
     expect(documentXml).toContain("<w:lastRenderedPageBreak/><w:t>Keep later break</w:t>");
+  });
+
+  it("extracts repeatable letterhead fallbacks from header text boxes", () => {
+    vi.stubGlobal("DOMParser", DOMParser);
+
+    const hints = getDocxLayoutHints(makeLetterheadDocxBuffer("header"));
+
+    expect(hints.letterhead?.repeatOnPages).toBe(true);
+    expect(hints.letterhead?.paragraphs[0]?.runs[0]).toMatchObject({
+      text: "HIMPUNAN MAHASISWA TEKNOLOGI INFORMASI",
+      bold: true,
+    });
+    expect(hints.letterhead?.images).toHaveLength(2);
+    expect(hints.letterhead?.images[0]?.src).toContain("bGVmdA==");
+  });
+
+  it("extracts first-page letterhead fallbacks from body text boxes", () => {
+    vi.stubGlobal("DOMParser", DOMParser);
+
+    const hints = getDocxLayoutHints(makeLetterheadDocxBuffer("document"));
+
+    expect(hints.letterhead?.repeatOnPages).toBe(false);
+    expect(hints.letterhead?.sourcePart).toBe("word/document.xml");
   });
 });

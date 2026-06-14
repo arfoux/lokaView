@@ -728,6 +728,65 @@ button:disabled {
   overflow: hidden;
 }
 
+.docx-letterhead-fallback {
+  position: absolute;
+  top: 28px;
+  left: 8%;
+  right: 8%;
+  height: 90px;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 76px;
+  align-items: start;
+  gap: 10px;
+  color: #000000;
+  font-family: "Times New Roman", Times, serif;
+  line-height: 1.05;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.docx-letterhead-logo {
+  width: 66px;
+  max-height: 72px;
+  object-fit: contain;
+}
+
+.docx-letterhead-logo-left {
+  justify-self: start;
+}
+
+.docx-letterhead-logo-right {
+  justify-self: end;
+}
+
+.docx-letterhead-text {
+  min-width: 0;
+  padding-top: 4px;
+  text-align: center;
+}
+
+.docx-letterhead-text p {
+  margin: 0;
+}
+
+.docx-letterhead-title {
+  font-size: 12pt;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.docx-letterhead-meta {
+  font-size: 10.5pt;
+  font-style: italic;
+}
+
+.docx-letterhead-rule {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-top: 3px solid #000000;
+  border-bottom: 1px solid #000000;
+}
+
 .docx-render-surface table {
   box-sizing: border-box;
   table-layout: fixed;
