@@ -39,7 +39,7 @@ export const docxAdapter: DocumentAdapter<DocxOpenedDocument> = {
       kind: "docx",
       file,
       detection,
-      capabilities: ["download-original", "zoom", "text-extraction"],
+      capabilities: ["download-original", "zoom", "text-extraction", "local-editing"],
       warnings: zip.warnings,
     });
 

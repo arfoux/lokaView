@@ -9,6 +9,7 @@ export type ViewerCapability =
   | "pagination"
   | "fullscreen"
   | "download-original"
+  | "local-editing"
   | "rotate"
   | "sheet-navigation"
   | "slide-navigation"
