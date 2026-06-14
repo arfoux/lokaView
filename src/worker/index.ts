@@ -25,6 +25,26 @@ function textResponse(message: string, status: number) {
   });
 }
 
+export function shouldServeAppShellForUrlRequest(request: Request) {
+  if (request.method !== "GET") {
+    return false;
+  }
+
+  if (request.headers.get("Sec-Fetch-Dest") === "document") {
+    return true;
+  }
+
+  return request.headers.get("Accept")?.includes("text/html") ?? false;
+}
+
+function createAppShellRequest(request: Request) {
+  const url = new URL(request.url);
+  url.pathname = "/";
+  url.search = "";
+
+  return new Request(url, request);
+}
+
 async function handleUrlDocumentRequest(request: Request, env: WorkerEnv) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return textResponse("Method not allowed.", 405);
@@ -45,8 +65,11 @@ async function handleUrlDocumentRequest(request: Request, env: WorkerEnv) {
 
   const githubApiUrl = githubBlobUrlToContentsApiUrl(document.sourceUrl);
   let upstreamResponse: Response;
+  let upstreamKind: "github" | "remote-url" = "remote-url";
 
   if (githubApiUrl) {
+    upstreamKind = "github";
+
     if (!isGitHubBlobSourceAllowed(document.sourceUrl)) {
       return textResponse("That GitHub document source is not allowed.", 403);
     }
@@ -74,7 +97,10 @@ async function handleUrlDocumentRequest(request: Request, env: WorkerEnv) {
 
   if (!upstreamResponse.ok) {
     const status = upstreamResponse.status === 404 ? 404 : 502;
-    return textResponse("The requested document could not be loaded.", status);
+    const message = upstreamKind === "github" && upstreamResponse.status === 404
+      ? `GitHub could not find ${document.relativePath}. Check that the file exists on the configured branch and that GITHUB_TOKEN has read access to the repository contents.`
+      : "The requested document could not be loaded.";
+    return textResponse(message, status);
   }
 
   return new Response(request.method === "HEAD" ? null : upstreamResponse.body, {
@@ -93,6 +119,10 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/url" || url.pathname.startsWith("/url/")) {
+      if (shouldServeAppShellForUrlRequest(request)) {
+        return env.ASSETS.fetch(createAppShellRequest(request));
+      }
+
       return handleUrlDocumentRequest(request, env);
     }
 

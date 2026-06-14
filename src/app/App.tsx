@@ -1,5 +1,5 @@
 import { FolderOpen, ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ACCEPTED_FILE_EXTENSIONS, PRIVACY_PROMISE } from "./config";
 import { AppHeader } from "../components/AppHeader";
 import { DocumentWarnings } from "../components/DocumentWarnings";
@@ -79,6 +79,7 @@ export function App() {
   const [state, setState] = useState<AppState>({ status: "idle" });
   const session = useMemo(() => new DocumentSession(), []);
   const abortControllerRef = useRef<AbortController | undefined>(undefined);
+  const autoOpenedUrlRef = useRef("");
   const hiddenInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -96,7 +97,7 @@ export function App() {
     setState({ status: "idle" });
   };
 
-  const openFile = async (file: File, allowLargeFile = false) => {
+  const openFile = useCallback(async (file: File, allowLargeFile = false) => {
     const sizeValidation = validateFileSize(file.size);
 
     if (sizeValidation.status === "block") {
@@ -153,7 +154,7 @@ export function App() {
 
       setState({ status: "error", error });
     }
-  };
+  }, [session]);
 
   const handleFileInput = (files: FileList | null) => {
     const file = files?.[0];
@@ -166,7 +167,7 @@ export function App() {
     }
   };
 
-  const openUrlDocument = async (value: string) => {
+  const openUrlDocument = useCallback(async (value: string) => {
     let internalUrl: string;
 
     try {
@@ -230,7 +231,22 @@ export function App() {
 
       setState({ status: "error", error });
     }
-  };
+  }, [openFile, session]);
+
+  useEffect(() => {
+    if (!window.location.pathname.startsWith("/url/")) {
+      return;
+    }
+
+    const internalUrl = `${window.location.pathname}${window.location.search}`;
+
+    if (autoOpenedUrlRef.current === internalUrl) {
+      return;
+    }
+
+    autoOpenedUrlRef.current = internalUrl;
+    void openUrlDocument(internalUrl);
+  }, [openUrlDocument]);
 
   return (
     <div className="app-shell">
