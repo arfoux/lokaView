@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Maximize2, Minus, Plus, RotateCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from "pdfjs-dist";
 import type { PdfOpenedDocument } from "../types";
@@ -182,6 +182,7 @@ export function PdfViewer({ document }: { document: PdfOpenedDocument }) {
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1.1);
+  const [fitMode, setFitMode] = useState(() => window.innerWidth < 760);
   const [rotation, setRotation] = useState(0);
   const [renderPixelRatio, setRenderPixelRatio] = useState(() => window.devicePixelRatio || 1);
   const [loadingPercent, setLoadingPercent] = useState(0);
@@ -263,17 +264,41 @@ export function PdfViewer({ document }: { document: PdfOpenedDocument }) {
     pagesRef.current[bounded - 1]?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
-  const fitWidth = async () => {
+  const fitWidth = useCallback(async () => {
     if (!pdf || !shellRef.current) {
       return;
     }
 
     const page = await pdf.getPage(1);
     const viewport = page.getViewport({ scale: 1, rotation });
-    const availableWidth = Math.max(shellRef.current.clientWidth - 64, 320);
-    setScale(Math.min(Math.max(availableWidth / viewport.width, 0.5), 2.5));
+    const horizontalPadding = window.innerWidth < 640 ? 28 : 64;
+    const availableWidth = Math.max(shellRef.current.clientWidth - horizontalPadding, 260);
+    setScale(Math.min(Math.max(availableWidth / viewport.width, 0.35), 2.5));
     page.cleanup();
-  };
+  }, [pdf, rotation]);
+
+  useEffect(() => {
+    if (!fitMode) {
+      return;
+    }
+
+    void fitWidth();
+  }, [fitMode, fitWidth, pageCount]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+
+    if (!shell || !fitMode || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      void fitWidth();
+    });
+
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [fitMode, fitWidth]);
 
   const requestFullscreen = () => {
     void shellRef.current?.requestFullscreen?.();
@@ -300,16 +325,16 @@ export function PdfViewer({ document }: { document: PdfOpenedDocument }) {
           </button>
         </div>
         <div className="segmented-controls" aria-label="PDF zoom controls">
-          <button type="button" className="icon-button" onClick={() => setScale((value) => Math.max(0.4, value - 0.1))} title="Zoom out">
+          <button type="button" className="icon-button" onClick={() => { setFitMode(false); setScale((value) => Math.max(0.35, value - 0.1)); }} title="Zoom out">
             <Minus aria-hidden="true" size={17} />
             <span className="sr-only">Zoom out</span>
           </button>
           <span>{Math.round(scale * 100)}%</span>
-          <button type="button" className="icon-button" onClick={() => setScale((value) => Math.min(3, value + 0.1))} title="Zoom in">
+          <button type="button" className="icon-button" onClick={() => { setFitMode(false); setScale((value) => Math.min(3, value + 0.1)); }} title="Zoom in">
             <Plus aria-hidden="true" size={17} />
             <span className="sr-only">Zoom in</span>
           </button>
-          <button type="button" className="text-button" onClick={() => void fitWidth()}>
+          <button type="button" className={`text-button${fitMode ? " is-active" : ""}`} onClick={() => { setFitMode(true); void fitWidth(); }}>
             Fit width
           </button>
           <button type="button" className="icon-button" onClick={() => setRotation((value) => (value + 90) % 360)} title="Rotate clockwise">

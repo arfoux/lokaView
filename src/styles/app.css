@@ -852,9 +852,12 @@ button:disabled {
 .pdf-text-layer :is(span, br) {
   position: absolute;
   color: transparent;
+  -webkit-text-fill-color: transparent;
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
+  text-shadow: none;
+  user-select: text;
 }
 
 .pdf-text-layer {
@@ -882,11 +885,23 @@ button:disabled {
   cursor: default;
 }
 
-.pdf-text-layer ::selection {
+.pdf-text-layer ::selection,
+.pdf-text-layer :is(span, br)::selection {
   background: color-mix(in srgb, AccentColor, transparent 75%);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
 }
 
-.pdf-text-layer br::selection {
+.pdf-text-layer ::-moz-selection,
+.pdf-text-layer :is(span, br)::-moz-selection {
+  background: rgba(0, 0, 255, 0.22);
+  color: transparent;
+  text-shadow: none;
+}
+
+.pdf-text-layer br::selection,
+.pdf-text-layer br::-moz-selection {
   background: transparent;
 }
 
