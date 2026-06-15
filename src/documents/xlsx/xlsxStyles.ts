@@ -1,5 +1,5 @@
 import { unzipSync } from "fflate";
-import type { SpreadsheetCellStyle } from "../types";
+import type { SpreadsheetCellStyle, SpreadsheetMerge } from "../types";
 
 interface WorkbookSheetInfo {
   name: string;
@@ -10,6 +10,7 @@ interface ExtractedSheetStyles {
   cellStyles: Record<string, SpreadsheetCellStyle>;
   columnStyles: Record<number, SpreadsheetCellStyle>;
   rowStyles: Record<number, SpreadsheetCellStyle>;
+  merges: SpreadsheetMerge[];
 }
 
 export type ExtractedWorkbookStyles = Record<string, ExtractedSheetStyles>;
@@ -262,6 +263,25 @@ function decodeCellReference(reference: string): { row: number; column: number }
   return { row: Number(match[2]) - 1, column: column - 1 };
 }
 
+function parseMergeReference(reference: string): SpreadsheetMerge | undefined {
+  const [start, end] = reference.split(":");
+  const startCell = start ? decodeCellReference(start) : undefined;
+  const endCell = end ? decodeCellReference(end) : startCell;
+
+  if (!startCell || !endCell) {
+    return undefined;
+  }
+
+  const startRow = Math.min(startCell.row, endCell.row);
+  const startColumn = Math.min(startCell.column, endCell.column);
+  const rowSpan = Math.abs(endCell.row - startCell.row) + 1;
+  const columnSpan = Math.abs(endCell.column - startCell.column) + 1;
+
+  return rowSpan > 1 || columnSpan > 1
+    ? { startRow, startColumn, rowSpan, columnSpan }
+    : undefined;
+}
+
 function styleFromIndex(styleTable: ParsedStyleTable, index: string | null): SpreadsheetCellStyle | undefined {
   if (index === null) {
     return undefined;
@@ -286,6 +306,9 @@ function extractSheetStyles(sheetXml: Document, styleTable: ParsedStyleTable): E
   const cellStyles: Record<string, SpreadsheetCellStyle> = {};
   const columnStyles: Record<number, SpreadsheetCellStyle> = {};
   const rowStyles: Record<number, SpreadsheetCellStyle> = {};
+  const merges = childrenByLocalName(sheetXml, "mergeCell")
+    .map((mergeCell) => parseMergeReference(mergeCell.getAttribute("ref") ?? ""))
+    .filter((merge): merge is SpreadsheetMerge => Boolean(merge));
 
   for (const column of childrenByLocalName(sheetXml, "col")) {
     const style = styleFromIndex(styleTable, column.getAttribute("style"));
@@ -318,7 +341,7 @@ function extractSheetStyles(sheetXml: Document, styleTable: ParsedStyleTable): E
     }
   }
 
-  return { cellStyles, columnStyles, rowStyles };
+  return { cellStyles, columnStyles, rowStyles, merges };
 }
 
 export function extractWorkbookStyles(arrayBuffer: ArrayBuffer): ExtractedWorkbookStyles {

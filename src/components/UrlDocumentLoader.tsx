@@ -32,7 +32,7 @@ export function UrlDocumentLoader({ onOpenUrl }: UrlDocumentLoaderProps) {
     >
       <label htmlFor="url-document-input">
         <Link2 aria-hidden="true" size={18} />
-        Open from internal URL
+        Open from URL
       </label>
       <div className="url-loader-row">
         <input

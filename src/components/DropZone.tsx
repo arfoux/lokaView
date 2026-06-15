@@ -1,18 +1,15 @@
 import { FileUp, FolderOpen } from "lucide-react";
-import { useId, useRef, useState } from "react";
-import { ACCEPTED_FILE_EXTENSIONS, PRIVACY_PROMISE } from "../app/config";
+import { useState } from "react";
+import { PRIVACY_PROMISE } from "../app/config";
 
 interface DropZoneProps {
   onFileSelected: (file: File) => void;
+  onChooseFile: () => void;
   compact?: boolean;
 }
 
-export function DropZone({ onFileSelected, compact = false }: DropZoneProps) {
-  const inputId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
+export function DropZone({ onFileSelected, onChooseFile, compact = false }: DropZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
-
-  const openPicker = () => inputRef.current?.click();
 
   const handleFiles = (files: FileList | null) => {
     const file = files?.[0];
@@ -27,11 +24,15 @@ export function DropZone({ onFileSelected, compact = false }: DropZoneProps) {
       tabIndex={0}
       role="button"
       aria-label="Choose a local document"
-      onClick={openPicker}
+      onClick={onChooseFile}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) {
+          return;
+        }
+
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          openPicker();
+          onChooseFile();
         }
       }}
       onDragOver={(event) => {
@@ -45,13 +46,6 @@ export function DropZone({ onFileSelected, compact = false }: DropZoneProps) {
         handleFiles(event.dataTransfer.files);
       }}
     >
-      <input
-        ref={inputRef}
-        id={inputId}
-        type="file"
-        accept={ACCEPTED_FILE_EXTENSIONS}
-        onChange={(event) => handleFiles(event.currentTarget.files)}
-      />
       <div className="drop-zone-icon" aria-hidden="true">
         <FileUp size={compact ? 22 : 30} />
       </div>
@@ -65,7 +59,7 @@ export function DropZone({ onFileSelected, compact = false }: DropZoneProps) {
         className="primary-action"
         onClick={(event) => {
           event.stopPropagation();
-          openPicker();
+          onChooseFile();
         }}
       >
         <FolderOpen aria-hidden="true" size={18} />

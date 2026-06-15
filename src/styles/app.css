@@ -174,10 +174,6 @@ input:focus-visible {
     transform 160ms ease;
 }
 
-.drop-zone input {
-  display: none;
-}
-
 .drop-zone.is-drag-over {
   border-color: var(--accent);
   background: #edf8f5;

@@ -2,7 +2,7 @@ import readXlsxFile from "read-excel-file/browser";
 import type { CellValue, Sheet } from "read-excel-file/browser";
 import { FILE_LIMITS } from "../limits";
 import { createOpenedDocumentBase } from "../openedDocument";
-import type { DocumentAdapter, SpreadsheetSheet, XlsxOpenedDocument } from "../types";
+import type { DocumentAdapter, SpreadsheetMerge, SpreadsheetSheet, XlsxOpenedDocument } from "../types";
 import { DocumentError } from "../types";
 import { assertZipWithinLimits, inspectZip } from "../zipInspection";
 import { extractWorkbookStyles, type ExtractedWorkbookStyles } from "./xlsxStyles";
@@ -23,6 +23,23 @@ function stringifyCell(value: CellValue | null | undefined): string {
   return String(value);
 }
 
+function clampMergeToPreview(
+  merge: SpreadsheetMerge,
+  renderedRows: number,
+  renderedColumns: number,
+): SpreadsheetMerge | undefined {
+  if (merge.startRow >= renderedRows || merge.startColumn >= renderedColumns) {
+    return undefined;
+  }
+
+  const rowSpan = Math.min(merge.rowSpan, renderedRows - merge.startRow);
+  const columnSpan = Math.min(merge.columnSpan, renderedColumns - merge.startColumn);
+
+  return rowSpan > 1 || columnSpan > 1
+    ? { ...merge, rowSpan, columnSpan }
+    : undefined;
+}
+
 function toSheetPreview(sheet: Sheet, extractedStyles?: ExtractedWorkbookStyles[string]): SpreadsheetSheet {
   const rowCount = sheet.data.length;
   const columnCount = sheet.data.reduce((max, row) => Math.max(max, row.length), 0);
@@ -32,6 +49,9 @@ function toSheetPreview(sheet: Sheet, extractedStyles?: ExtractedWorkbookStyles[
     Array.from({ length: renderedColumns }, (_, index) => stringifyCell(row[index])),
   );
   const styles: SpreadsheetSheet["styles"] = {};
+  const merges = (extractedStyles?.merges ?? [])
+    .map((merge) => clampMergeToPreview(merge, renderedRows, renderedColumns))
+    .filter((merge): merge is SpreadsheetMerge => Boolean(merge));
 
   for (let row = 0; row < renderedRows; row += 1) {
     for (let column = 0; column < renderedColumns; column += 1) {
@@ -54,7 +74,7 @@ function toSheetPreview(sheet: Sheet, extractedStyles?: ExtractedWorkbookStyles[
     columnCount,
     truncatedRows: rowCount > renderedRows,
     truncatedColumns: columnCount > renderedColumns,
-    merges: [],
+    merges,
     styles,
   };
 }

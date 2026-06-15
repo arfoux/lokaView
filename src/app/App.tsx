@@ -89,7 +89,14 @@ export function App() {
     };
   }, [session]);
 
-  const openPicker = () => hiddenInputRef.current?.click();
+  const openPicker = () => {
+    if (!hiddenInputRef.current) {
+      return;
+    }
+
+    hiddenInputRef.current.value = "";
+    hiddenInputRef.current.click();
+  };
 
   const closeDocument = () => {
     abortControllerRef.current?.abort();
@@ -98,6 +105,10 @@ export function App() {
   };
 
   const openFile = useCallback(async (file: File, allowLargeFile = false) => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = undefined;
+    session.clear();
+
     const sizeValidation = validateFileSize(file.size);
 
     if (sizeValidation.status === "block") {
@@ -122,10 +133,8 @@ export function App() {
       return;
     }
 
-    abortControllerRef.current?.abort();
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    session.clear();
     setState({ status: "reading", fileName: file.name });
 
     try {
@@ -263,7 +272,7 @@ export function App() {
       <main className={state.status === "ready" ? "viewer-main" : "landing-main"}>
         {state.status === "idle" && (
           <>
-            <DropZone onFileSelected={(file) => void openFile(file)} />
+            <DropZone onFileSelected={(file) => void openFile(file)} onChooseFile={openPicker} />
             <UrlDocumentLoader onOpenUrl={(url) => void openUrlDocument(url)} />
             <div className="landing-support">
               <div>

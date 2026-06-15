@@ -10,9 +10,9 @@ Core promise:
 
 Implemented:
 
-- PDF (`.pdf`): PDF.js rendering, page navigation, progressive page rendering, zoom, fit width, rotate, fullscreen, encrypted-file failure message, original download.
+- PDF (`.pdf`): PDF.js rendering, selectable text layer, page navigation, progressive page rendering, zoom, fit width, rotate, fullscreen, encrypted-file failure message, original download.
 - Word (`.docx`): docx-preview rendering, zoom, layout-difference notice, unsafe link/resource neutralization, original download.
-- Excel (`.xlsx`): browser-local parsing with `read-excel-file`, sheet tabs, bounded grid preview, row/column headers, basic fill/font style preview, search, CSV export, JSON export, original download.
+- Excel (`.xlsx`): browser-local parsing with `read-excel-file`, sheet tabs, bounded grid preview, row/column headers, merged-cell preview, basic fill/font style preview, search, CSV export, JSON export, original download.
 - PowerPoint (`.pptx`): `@aiden0z/pptx-renderer` integration, recommended ZIP limits, slide navigation, thumbnails, fullscreen, zoom, keyboard arrows, text search, local PDF.js fallback assets for embedded previews, original download.
 - CSV (`.csv`): local delimiter detection, grid preview, search, CSV/JSON export, original download.
 
@@ -108,7 +108,7 @@ Documents are treated as untrusted input. The app validates basic signatures, de
 
 - DOCX rendering is not pixel-perfect Microsoft Word layout.
 - PPTX rendering is best-effort; uncommon effects, embedded media, or unsupported content may degrade.
-- XLSX previews prioritize visible values and responsive grids; basic fills/font colors are supported, while formulas, rich formatting, charts, pivot tables, and merged-cell fidelity are limited.
+- XLSX previews prioritize visible values and responsive grids; basic fills, font colors, and merged cells are supported, while formulas, rich formatting, charts, and pivot tables are limited.
 - Spreadsheet/CSV previews are capped for responsiveness.
 - Password-protected/encrypted documents are not opened.
 - No OCR, annotations, editing, cloud storage, sharing, or conversion pipeline is implemented yet.
