@@ -9,17 +9,37 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
+const MIN_PDF_OUTPUT_SCALE = 2;
+const MAX_PDF_OUTPUT_SCALE = 3;
+const MAX_PDF_CANVAS_PIXELS = 16_777_216;
+
+function getPdfOutputScale(viewport: { width: number; height: number }): number {
+  const deviceScale = window.devicePixelRatio || 1;
+  const preferredScale = Math.min(MAX_PDF_OUTPUT_SCALE, Math.max(MIN_PDF_OUTPUT_SCALE, deviceScale));
+  const viewportPixels = viewport.width * viewport.height;
+
+  if (viewportPixels <= 0) {
+    return preferredScale;
+  }
+
+  const maxSafeScale = Math.sqrt(MAX_PDF_CANVAS_PIXELS / viewportPixels);
+  return Math.max(1, Math.min(preferredScale, maxSafeScale));
+}
+
 interface PdfPageProps {
   pdf: PDFDocumentProxy;
   pageNumber: number;
   scale: number;
   rotation: number;
+  renderPixelRatio: number;
   onVisible: (pageNumber: number) => void;
 }
 
-function PdfPage({ pdf, pageNumber, scale, rotation, onVisible }: PdfPageProps) {
+function PdfPage({ pdf, pageNumber, scale, rotation, renderPixelRatio, onVisible }: PdfPageProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const pageViewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(pageNumber <= 2);
   const [error, setError] = useState("");
 
@@ -51,13 +71,19 @@ function PdfPage({ pdf, pageNumber, scale, rotation, onVisible }: PdfPageProps) 
 
     let canceled = false;
     let renderTask: RenderTask | undefined;
+    let textLayer: { cancel: () => void; render: () => Promise<void> } | undefined;
+    let activeTextLayerContainer: HTMLDivElement | undefined;
     let loadedPage: PDFPageProxy | undefined;
 
     async function renderPage() {
+      const pageViewport = pageViewportRef.current;
       const canvas = canvasRef.current;
-      if (!canvas) {
+      const textLayerContainer = textLayerRef.current;
+      if (!pageViewport || !canvas || !textLayerContainer) {
         return;
       }
+
+      activeTextLayerContainer = textLayerContainer;
 
       try {
         loadedPage = await pdf.getPage(pageNumber);
@@ -71,11 +97,29 @@ function PdfPage({ pdf, pageNumber, scale, rotation, onVisible }: PdfPageProps) 
           return;
         }
 
-        const outputScale = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
+        pageViewport.style.width = `${viewport.width}px`;
+        pageViewport.style.height = `${viewport.height}px`;
+        pageViewport.style.setProperty("--total-scale-factor", `${viewport.scale}`);
+
+        const outputScale = getPdfOutputScale(viewport);
+        canvas.width = Math.ceil(viewport.width * outputScale);
+        canvas.height = Math.ceil(viewport.height * outputScale);
         canvas.style.width = `${viewport.width}px`;
         canvas.style.height = `${viewport.height}px`;
+        canvas.dataset.outputScale = outputScale.toFixed(2);
+
+        textLayerContainer.replaceChildren();
+        textLayerContainer.style.width = `${viewport.width}px`;
+        textLayerContainer.style.height = `${viewport.height}px`;
+
+        textLayer = new pdfjsLib.TextLayer({
+          textContentSource: loadedPage.streamTextContent({
+            includeMarkedContent: true,
+            disableNormalization: true,
+          }),
+          container: textLayerContainer,
+          viewport,
+        });
 
         renderTask = loadedPage.render({
           canvas,
@@ -84,7 +128,14 @@ function PdfPage({ pdf, pageNumber, scale, rotation, onVisible }: PdfPageProps) 
           transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
         });
 
-        await renderTask.promise;
+        await Promise.all([
+          renderTask.promise,
+          textLayer.render().catch((textLayerError: unknown) => {
+            if (import.meta.env.DEV && !canceled) {
+              console.warn("PDF text layer render failed", textLayerError);
+            }
+          }),
+        ]);
       } catch (renderError) {
         if (!canceled && renderError instanceof Error && renderError.name !== "RenderingCancelledException") {
           setError("This page could not be rendered.");
@@ -97,14 +148,23 @@ function PdfPage({ pdf, pageNumber, scale, rotation, onVisible }: PdfPageProps) 
     return () => {
       canceled = true;
       renderTask?.cancel();
+      textLayer?.cancel();
+      activeTextLayerContainer?.replaceChildren();
       loadedPage?.cleanup();
     };
-  }, [isVisible, pageNumber, pdf, rotation, scale]);
+  }, [isVisible, pageNumber, pdf, renderPixelRatio, rotation, scale]);
 
   return (
     <div ref={wrapperRef} className="pdf-page-shell" data-page={pageNumber}>
       <span className="pdf-page-label">Page {pageNumber}</span>
-      {error ? <p className="viewer-error">{error}</p> : <canvas ref={canvasRef} />}
+      {error ? (
+        <p className="viewer-error">{error}</p>
+      ) : (
+        <div ref={pageViewportRef} className="pdf-page-viewport">
+          <canvas ref={canvasRef} />
+          <div ref={textLayerRef} className="textLayer pdf-text-layer" />
+        </div>
+      )}
     </div>
   );
 }
@@ -123,6 +183,7 @@ export function PdfViewer({ document }: { document: PdfOpenedDocument }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1.1);
   const [rotation, setRotation] = useState(0);
+  const [renderPixelRatio, setRenderPixelRatio] = useState(() => window.devicePixelRatio || 1);
   const [loadingPercent, setLoadingPercent] = useState(0);
   const [error, setError] = useState("");
   const shellRef = useRef<HTMLDivElement>(null);
@@ -165,6 +226,31 @@ export function PdfViewer({ document }: { document: PdfOpenedDocument }) {
       void loadingTask.destroy();
     };
   }, [document]);
+
+  useEffect(() => {
+    let mediaQuery: MediaQueryList | undefined;
+
+    const syncPixelRatio = () => {
+      setRenderPixelRatio(Math.round((window.devicePixelRatio || 1) * 100) / 100);
+    };
+
+    const watchPixelRatio = () => {
+      mediaQuery?.removeEventListener("change", watchPixelRatio);
+      mediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mediaQuery.addEventListener("change", watchPixelRatio);
+      syncPixelRatio();
+    };
+
+    watchPixelRatio();
+    window.addEventListener("resize", syncPixelRatio);
+    window.visualViewport?.addEventListener("resize", syncPixelRatio);
+
+    return () => {
+      mediaQuery?.removeEventListener("change", watchPixelRatio);
+      window.removeEventListener("resize", syncPixelRatio);
+      window.visualViewport?.removeEventListener("resize", syncPixelRatio);
+    };
+  }, []);
 
   const pageNumbers = useMemo(
     () => Array.from({ length: pageCount }, (_, index) => index + 1),
@@ -250,6 +336,7 @@ export function PdfViewer({ document }: { document: PdfOpenedDocument }) {
                 pageNumber={pageNumber}
                 scale={scale}
                 rotation={rotation}
+                renderPixelRatio={renderPixelRatio}
                 onVisible={setCurrentPage}
               />
             </div>
